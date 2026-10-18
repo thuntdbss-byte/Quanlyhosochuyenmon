@@ -1,0 +1,6 @@
+{
+  "name": "Quản lý hồ sơ chuyên môn",
+  "description": "Hệ thống quản lý hồ sơ chuyên môn nhà trường: tổ bộ môn, phân công giảng dạy, lịch trình, kế hoạch, sổ báo giảng, giáo án, nề nếp, dạy thay đổi giờ và báo cáo tổng hợp.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
