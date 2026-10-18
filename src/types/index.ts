@@ -94,6 +94,8 @@ export interface GiaoAnItem {
   reviewNotes?: string;
   has4Steps: boolean; // Khởi động, Khám phá kiến thức, Luyện tập, Vận dụng (CV 5512)
   competencies: string[]; // Phát triển năng lực tự chủ, giải quyết vấn đề...
+  driveFileId?: string;
+  driveUrl?: string;
 }
 
 export type KeHoachType =
@@ -120,6 +122,8 @@ export interface WeeklyBaoGiangFile {
   approvedBy?: string;
   approvalDate?: string;
   notes?: string;
+  driveFileId?: string;
+  driveUrl?: string;
 }
 
 export interface KeHoachItem {
@@ -138,6 +142,8 @@ export interface KeHoachItem {
   summary: string;
   fileUrl?: string;
   fileName: string;
+  driveFileId?: string;
+  driveUrl?: string;
 }
 
 export type RequestType = 'NGHI_DAY' | 'DAY_THAY' | 'DOI_GIO';

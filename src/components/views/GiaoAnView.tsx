@@ -23,7 +23,8 @@ import {
   Table,
   LayoutGrid,
   FileSpreadsheet,
-  HardDrive
+  HardDrive,
+  Folder
 } from 'lucide-react';
 
 export const GiaoAnView: React.FC = () => {
@@ -39,7 +40,11 @@ export const GiaoAnView: React.FC = () => {
     requestGiaoAnRevision,
     addGiaoAn,
     addToast,
-    openGoogleSync
+    openGoogleSync,
+    uploadGiaoAnToDrive,
+    syncAllRecordsToGoogleDrive,
+    targetDriveFolderUrl,
+    targetDriveFolderId
   } = useApp();
 
   const [viewMode, setViewMode] = useState<'TABLE' | 'CARDS'>('TABLE');
@@ -97,13 +102,13 @@ export const GiaoAnView: React.FC = () => {
     }
   };
 
-  const handleUpload = (e: React.FormEvent) => {
+  const handleUpload = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!uploadForm.lessonTitle) return;
 
     const teacher = teachers.find(t => t.id === uploadForm.teacherId) || currentUser;
 
-    addGiaoAn({
+    await addGiaoAn({
       teacherId: teacher.id,
       teacherName: teacher.name,
       departmentId: teacher.departmentId,
@@ -119,7 +124,7 @@ export const GiaoAnView: React.FC = () => {
       fileSize: uploadForm.fileSize,
       has4Steps: uploadForm.has4Steps,
       competencies: uploadForm.competencies.split(',').map(s => s.trim()).filter(Boolean)
-    });
+    }, selectedFileObj);
 
     setShowUploadModal(false);
     setSelectedFileObj(null);
@@ -203,6 +208,32 @@ export const GiaoAnView: React.FC = () => {
           >
             <UploadCloud className="w-4 h-4" />
             Tải Giáo án lên ngay
+          </button>
+
+          <a
+            href={targetDriveFolderUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+            title="Mở thư mục lưu trữ giáo án trên Google Drive"
+          >
+            <Folder className="w-4 h-4 text-amber-600" />
+            Folder Drive Hồ Sơ
+          </a>
+
+          <button
+            onClick={async () => {
+              try {
+                await syncAllRecordsToGoogleDrive();
+              } catch (e: any) {
+                addToast(e.message || 'Lỗi lưu lên Drive', 'warning');
+              }
+            }}
+            className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+            title="Lưu toàn bộ KHBD và Sổ báo giảng vào Thư mục Google Drive"
+          >
+            <HardDrive className="w-4 h-4 text-blue-600" />
+            Lưu toàn bộ vào Drive
           </button>
 
           <button
@@ -488,6 +519,31 @@ export const GiaoAnView: React.FC = () => {
                       {/* Thao tác */}
                       <td className="p-3 text-center">
                         <div className="flex items-center justify-center gap-1">
+                          {item.driveUrl ? (
+                            <a
+                              href={item.driveUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="p-1.5 rounded-md border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 transition-colors"
+                              title="Mở tệp trong thư mục Google Drive (1dZzgmUm...)"
+                            >
+                              <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
+                            </a>
+                          ) : (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await uploadGiaoAnToDrive(item.id);
+                                } catch (e: any) {
+                                  addToast(e.message || 'Lỗi lưu vào Drive', 'warning');
+                                }
+                              }}
+                              className="p-1.5 rounded-md border border-slate-200 bg-white hover:bg-indigo-50 text-slate-500 hover:text-indigo-600 transition-colors"
+                              title="Lưu tệp này vào Thư mục Google Drive (1dZzgmUm...)"
+                            >
+                              <HardDrive className="w-3.5 h-3.5" />
+                            </button>
+                          )}
                           <button
                             onClick={() => downloadGiaoAnFile(item)}
                             className="p-1.5 rounded-md border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 hover:text-indigo-600 transition-colors"
@@ -628,6 +684,34 @@ export const GiaoAnView: React.FC = () => {
                       </div>
 
                       <div className="flex items-center gap-1.5 mt-2 flex-wrap justify-end">
+                        {item.driveUrl ? (
+                          <a
+                            href={item.driveUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="px-2.5 py-1.5 rounded-lg border border-emerald-300 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-xs font-bold flex items-center gap-1 transition-colors shadow-2xs"
+                            title="Mở tệp trong thư mục Google Drive (1dZzgmUm...)"
+                          >
+                            <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
+                            Drive 🔗
+                          </a>
+                        ) : (
+                          <button
+                            onClick={async () => {
+                              try {
+                                await uploadGiaoAnToDrive(item.id);
+                              } catch (e: any) {
+                                addToast(e.message || 'Lỗi lưu vào Drive', 'warning');
+                              }
+                            }}
+                            className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-indigo-50 text-slate-700 hover:text-indigo-600 text-xs font-semibold flex items-center gap-1 transition-colors"
+                            title="Lưu tệp này vào Thư mục Google Drive (1dZzgmUm...)"
+                          >
+                            <HardDrive className="w-3.5 h-3.5 text-slate-500" />
+                            Lưu Drive
+                          </button>
+                        )}
+
                         <button
                           onClick={() => downloadGiaoAnFile(item)}
                           className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white hover:bg-slate-50 text-slate-700 text-xs font-semibold flex items-center gap-1 transition-colors"
@@ -912,6 +996,19 @@ export const GiaoAnView: React.FC = () => {
                   onChange={e => setUploadForm({ ...uploadForm, has4Steps: e.target.checked })}
                   className="w-4 h-4 text-indigo-600 rounded"
                 />
+              </div>
+
+              <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                  <Folder className="w-4 h-4 text-amber-600" />
+                  Lưu trữ tự động vào Google Drive
+                </div>
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  Tệp giáo án tải lên sẽ được đồng bộ trực tiếp vào Thư mục Google Drive trường:
+                  <span className="font-mono font-semibold block text-[10px] text-amber-800 break-all mt-0.5">
+                    1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq / 02_Ke_Hoach_Bai_Day_KHBD
+                  </span>
+                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">

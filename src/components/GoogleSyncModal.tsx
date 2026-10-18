@@ -20,7 +20,10 @@ import {
   parseSheetToBaoGiang,
   DriveFileInfo,
   GoogleSyncResult,
-  getEffectiveFirebaseConfig
+  getEffectiveFirebaseConfig,
+  listFilesInTargetFolder,
+  DEFAULT_DRIVE_FOLDER_ID,
+  DEFAULT_DRIVE_FOLDER_URL
 } from '../services/googleWorkspace';
 import { useApp } from '../context/AppContext';
 import {
@@ -47,13 +50,16 @@ import {
   Link2,
   Unlink,
   ArrowDownToLine,
-  ArrowUpFromLine
+  ArrowUpFromLine,
+  HelpCircle,
+  FileCode,
+  Folder
 } from 'lucide-react';
 
 interface GoogleSyncModalProps {
   isOpen: boolean;
   onClose: () => void;
-  defaultTab?: 'sheets' | 'drive' | 'github';
+  defaultTab?: 'sheets' | 'drive' | 'github' | 'guide';
 }
 
 export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
@@ -67,18 +73,24 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
     assignments,
     giaoAnList,
     baoGiangList,
+    weeklyBaoGiangFiles,
     academicYear,
     addToast,
     connectedSheet,
     setConnectedSheet,
     importTeachers,
     importGiaoAnList,
-    importBaoGiangList
+    importBaoGiangList,
+    targetDriveFolderId,
+    targetDriveFolderUrl,
+    setTargetDriveFolder,
+    resetTargetDriveFolder,
+    syncAllRecordsToGoogleDrive
   } = useApp();
 
   const [currentUser, setCurrentUser] = useState<{ displayName?: string | null; email?: string | null; photoURL?: string | null } | null>(null);
   const [accessToken, setAccessToken] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<'sheets' | 'drive' | 'github'>(defaultTab);
+  const [activeTab, setActiveTab] = useState<'sheets' | 'drive' | 'github' | 'guide'>(defaultTab);
   const [loading, setLoading] = useState(false);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [lastResult, setLastResult] = useState<GoogleSyncResult | null>(null);
@@ -125,15 +137,24 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
     return () => unsubscribe();
   }, []);
 
-  // Fetch Drive spreadsheets when user is authenticated
+  const [folderFiles, setFolderFiles] = useState<DriveFileInfo[]>([]);
+  const [loadingFolderFiles, setLoadingFolderFiles] = useState(false);
+  const [customFolderInput, setCustomFolderInput] = useState(targetDriveFolderId);
+
+  useEffect(() => {
+    setCustomFolderInput(targetDriveFolderId);
+  }, [targetDriveFolderId]);
+
+  // Fetch Drive spreadsheets & files when user is authenticated
   useEffect(() => {
     if (currentUser && isOpen) {
       loadDriveSpreadsheets();
       if (activeTab === 'drive') {
         loadDriveFiles();
+        loadFolderFiles();
       }
     }
-  }, [currentUser, activeTab, isOpen]);
+  }, [currentUser, activeTab, isOpen, targetDriveFolderId]);
 
   const copyToClipboard = (text: string, keyName: string) => {
     navigator.clipboard.writeText(text);
@@ -155,15 +176,50 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
     }
   };
 
+  const loadFolderFiles = async () => {
+    if (!currentUser) return;
+    setLoadingFolderFiles(true);
+    try {
+      const files = await listFilesInTargetFolder(targetDriveFolderId);
+      setFolderFiles(files);
+    } catch (err: any) {
+      console.warn('Lỗi tải tệp trong thư mục chỉ định:', err);
+    } finally {
+      setLoadingFolderFiles(false);
+    }
+  };
+
   const loadDriveFiles = async () => {
     setLoadingFiles(true);
     try {
       const files = await listDriveFiles();
       setDriveFiles(files);
+      await loadFolderFiles();
     } catch (err: any) {
       console.error('Lỗi tải tệp Drive:', err);
     } finally {
       setLoadingFiles(false);
+    }
+  };
+
+  const handleSyncAllTeacherRecordsToDrive = async () => {
+    if (!currentUser) {
+      addToast('Vui lòng đăng nhập Google trước', 'warning');
+      return;
+    }
+    setLoading(true);
+    setActionMessage('Đang lưu toàn bộ Sổ báo giảng và Kế hoạch bài dạy vào Google Drive...');
+    try {
+      await syncAllRecordsToGoogleDrive();
+      await loadFolderFiles();
+      await loadDriveFiles();
+    } catch (err: any) {
+      const diag = translateGoogleAuthError(err);
+      setAuthError(diag);
+      addToast(diag.title, 'error');
+    } finally {
+      setLoading(false);
+      setActionMessage(null);
     }
   };
 
@@ -749,6 +805,17 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
             <GitBranch className="w-4 h-4 text-violet-600" />
             Đẩy lên GitHub & Cấu hình Cloud
           </button>
+          <button
+            onClick={() => setActiveTab('guide')}
+            className={`pb-3 px-4 text-xs font-bold flex items-center gap-2 border-b-2 transition-colors ${
+              activeTab === 'guide'
+                ? 'border-blue-600 text-blue-700'
+                : 'border-transparent text-slate-500 hover:text-slate-800'
+            }`}
+          >
+            <HelpCircle className="w-4 h-4 text-blue-600" />
+            Tra cứu Link & Thông số
+          </button>
         </div>
 
         {/* Modal Body */}
@@ -1098,82 +1165,172 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
             </div>
           )}
 
-          {/* TAB 2: GOOGLE DRIVE */}
+          {/* TAB 2: GOOGLE DRIVE TARGET FOLDER & TEACHER RECORDS */}
           {activeTab === 'drive' && (
             <div className="space-y-4">
-              <div className="p-4 rounded-xl border border-indigo-200 bg-indigo-50/50 flex flex-col sm:flex-row items-center justify-between gap-3">
-                <div>
-                  <div className="font-bold text-xs text-indigo-950 flex items-center gap-1.5">
-                    <HardDrive className="w-4 h-4 text-indigo-600" />
-                    Sao lưu Snapshot Toàn Trường lên Google Drive
+              {/* PRIMARY TARGET FOLDER CARD */}
+              <div className="p-4 rounded-xl border-2 border-indigo-500 bg-linear-to-br from-indigo-50 via-white to-amber-50/40 shadow-xs space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-3">
+                  <div className="space-y-1">
+                    <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-extrabold uppercase bg-indigo-600 text-white tracking-wider">
+                      <Folder className="w-3 h-3" /> Thư mục chỉ định của bạn
+                    </div>
+                    <h3 className="font-extrabold text-sm text-slate-900 leading-snug">
+                      Thư mục Lưu Toàn Bộ Hồ Sơ Giáo Viên
+                    </h3>
+                    <p className="text-[11px] text-slate-600">
+                      Tất cả hồ sơ gồm <strong>Sổ báo giảng tuần</strong>, <strong>Kế hoạch bài dạy (KHBD / Giáo án CV 5512)</strong>, kế hoạch bộ môn sẽ được lưu trực tiếp vào folder này.
+                    </p>
                   </div>
-                  <div className="text-[11px] text-indigo-700 mt-0.5">
-                    Tạo tệp JSON backup lưu trữ vĩnh viễn trên Drive cá nhân với thời gian và dấu mốc
+
+                  <a
+                    href={targetDriveFolderUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="px-3.5 py-2 bg-white hover:bg-slate-50 text-indigo-700 border border-indigo-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs shrink-0 transition-colors"
+                  >
+                    <ExternalLink className="w-4 h-4 text-indigo-600" />
+                    Mở Folder trên Drive
+                  </a>
+                </div>
+
+                {/* Folder details banner */}
+                <div className="p-2.5 bg-white/80 rounded-lg border border-indigo-100 flex flex-wrap items-center justify-between gap-2 text-xs">
+                  <div className="min-w-0">
+                    <span className="text-[10px] font-bold text-slate-400 block uppercase">Folder ID đích:</span>
+                    <span className="font-mono font-bold text-indigo-900 text-[11px] truncate block select-all">
+                      {targetDriveFolderId}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[10px] font-bold rounded-full border border-emerald-300">
+                      ✓ Đã kết nối sẵn sàng
+                    </span>
+                    <button
+                      onClick={() => copyToClipboard(targetDriveFolderUrl, 'Folder-URL')}
+                      className="px-2 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded text-[11px] font-semibold flex items-center gap-1"
+                      title="Sao chép liên kết thư mục"
+                    >
+                      {copiedKey === 'Folder-URL' ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3" />}
+                      Copy Link
+                    </button>
                   </div>
                 </div>
-                <button
-                  onClick={handleBackupToDrive}
-                  disabled={loading}
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shadow-xs shrink-0"
-                >
-                  <Upload className="w-4 h-4" />
-                  Sao lưu lên Drive
-                </button>
-              </div>
 
-              {/* Create Drive Folder form */}
-              <form onSubmit={handleCreateFolder} className="flex gap-2">
-                <input
-                  type="text"
-                  value={newFolderName}
-                  onChange={e => setNewFolderName(e.target.value)}
-                  placeholder="Tên thư mục mới..."
-                  className="flex-1 px-3 py-1.5 text-xs border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                />
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="px-3.5 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-colors shrink-0"
-                >
-                  <FolderPlus className="w-3.5 h-3.5 text-indigo-600" />
-                  Tạo Thư mục Drive
-                </button>
-              </form>
+                {/* Subfolder structure preview */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[11px]">
+                  <div className="p-2 bg-white rounded-lg border border-slate-200 flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-md bg-amber-100 text-amber-700 flex items-center justify-center font-bold text-[10px] shrink-0">
+                      01
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-800 truncate">01_So_Bao_Giang</div>
+                      <div className="text-[10px] text-slate-400">{weeklyBaoGiangFiles.length} file tuần</div>
+                    </div>
+                  </div>
 
-              {/* Drive files list */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-bold text-slate-800">
-                    Tệp & Thư mục trên Google Drive ({driveFiles.length})
-                  </span>
+                  <div className="p-2 bg-white rounded-lg border border-slate-200 flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-md bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-[10px] shrink-0">
+                      02
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-800 truncate">02_Ke_Hoach_Bai_Day</div>
+                      <div className="text-[10px] text-slate-400">{giaoAnList.length} bài dạy KHBD</div>
+                    </div>
+                  </div>
+
+                  <div className="p-2 bg-white rounded-lg border border-slate-200 flex items-center gap-2">
+                    <div className="w-6 h-6 rounded-md bg-emerald-100 text-emerald-700 flex items-center justify-center font-bold text-[10px] shrink-0">
+                      03
+                    </div>
+                    <div className="min-w-0">
+                      <div className="font-bold text-slate-800 truncate">03_Ke_Hoach_Chuyen_Mon</div>
+                      <div className="text-[10px] text-slate-400">Kế hoạch & Báo cáo</div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* BIG ONE-CLICK SAVE ACTION BUTTON */}
+                <div className="pt-1 flex flex-col sm:flex-row items-center gap-2">
                   <button
-                    onClick={loadDriveFiles}
-                    disabled={!currentUser || loadingFiles}
-                    className="text-[11px] text-indigo-600 hover:underline flex items-center gap-1 font-semibold"
+                    onClick={handleSyncAllTeacherRecordsToDrive}
+                    disabled={loading || !currentUser}
+                    className="w-full sm:flex-1 py-2.5 px-4 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-all shadow-md active:scale-98"
                   >
-                    <RefreshCw className={`w-3 h-3 ${loadingFiles ? 'animate-spin' : ''}`} />
-                    Làm mới
+                    <Upload className="w-4 h-4" />
+                    LƯU TOÀN BỘ HỒ SƠ GIÁO VIÊN VÀO FOLDER NÀY NGAY ({giaoAnList.length + weeklyBaoGiangFiles.length} tệp)
+                  </button>
+
+                  <button
+                    onClick={loadFolderFiles}
+                    disabled={!currentUser || loadingFolderFiles}
+                    className="px-3.5 py-2.5 bg-white hover:bg-slate-50 text-slate-700 border border-slate-300 rounded-xl text-xs font-semibold flex items-center gap-1.5 shrink-0 transition-colors"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${loadingFolderFiles ? 'animate-spin text-indigo-600' : ''}`} />
+                    Kiểm tra Folder
                   </button>
                 </div>
 
-                <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 bg-white max-h-56 overflow-y-auto">
-                  {driveFiles.length === 0 ? (
-                    <div className="p-6 text-center text-xs text-slate-400">
-                      {currentUser
-                        ? 'Chưa có tệp nào được tạo bởi ứng dụng. Hãy bấm "Tạo Google Sheet" hoặc "Sao lưu lên Drive" ở trên!'
-                        : 'Vui lòng đăng nhập Google để xem danh sách tệp.'}
+                {/* Custom Folder ID Configuration dropdown/toggle */}
+                <div className="pt-2 border-t border-slate-200/60 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={customFolderInput}
+                    onChange={e => setCustomFolderInput(e.target.value)}
+                    placeholder="Dán link hoặc ID Folder Drive khác nếu muốn đổi..."
+                    className="flex-1 px-3 py-1.5 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 font-mono text-[11px]"
+                  />
+                  <button
+                    onClick={() => setTargetDriveFolder(customFolderInput)}
+                    className="px-3 py-1.5 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shrink-0"
+                  >
+                    Đổi Folder
+                  </button>
+                  {targetDriveFolderId !== DEFAULT_DRIVE_FOLDER_ID && (
+                    <button
+                      onClick={() => {
+                        resetTargetDriveFolder();
+                        setCustomFolderInput(DEFAULT_DRIVE_FOLDER_ID);
+                      }}
+                      className="px-2.5 py-1.5 text-[11px] text-rose-600 hover:underline shrink-0"
+                    >
+                      Đặt lại mặc định
+                    </button>
+                  )}
+                </div>
+              </div>
+
+              {/* FILES IN TARGET FOLDER LIST */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                    <Folder className="w-4 h-4 text-amber-500" />
+                    Tệp & Thư mục con trong Folder 1dZzgmUm... ({folderFiles.length})
+                  </span>
+                  <span className="text-[10px] text-slate-500">
+                    Cập nhật tự động khi giáo viên tải lên
+                  </span>
+                </div>
+
+                <div className="border border-slate-200 rounded-xl overflow-hidden divide-y divide-slate-100 bg-white max-h-52 overflow-y-auto">
+                  {folderFiles.length === 0 ? (
+                    <div className="p-6 text-center text-xs text-slate-400 space-y-1">
+                      <p>Chưa có tệp nào được lưu trực tiếp vào thư mục này.</p>
+                      <p className="text-[11px] text-slate-500">
+                        Nhấn nút <strong>"LƯU TOÀN BỘ HỒ SƠ GIÁO VIÊN VÀO FOLDER NÀY NGAY"</strong> ở trên để đẩy toàn bộ Sổ báo giảng và Kế hoạch bài dạy lên!
+                      </p>
                     </div>
                   ) : (
-                    driveFiles.map(file => (
+                    folderFiles.map(file => (
                       <div
                         key={file.id}
                         className="p-3 flex items-center justify-between gap-3 hover:bg-slate-50 transition-colors"
                       >
                         <div className="flex items-center gap-2.5 min-w-0">
-                          {file.mimeType.includes('spreadsheet') ? (
+                          {file.mimeType.includes('folder') ? (
+                            <Folder className="w-4 h-4 text-amber-500 shrink-0" />
+                          ) : file.mimeType.includes('spreadsheet') ? (
                             <FileSpreadsheet className="w-4 h-4 text-emerald-600 shrink-0" />
-                          ) : file.mimeType.includes('folder') ? (
-                            <FolderPlus className="w-4 h-4 text-amber-500 shrink-0" />
                           ) : (
                             <FileText className="w-4 h-4 text-indigo-600 shrink-0" />
                           )}
@@ -1182,7 +1339,7 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
                               {file.name}
                             </div>
                             <div className="text-[10px] text-slate-400">
-                              {file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString('vi-VN') : ''}
+                              {file.modifiedTime ? new Date(file.modifiedTime).toLocaleString('vi-VN') : ''}
                             </div>
                           </div>
                         </div>
@@ -1202,6 +1359,40 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
                     ))
                   )}
                 </div>
+              </div>
+
+              {/* SECONDARY BACKUP & FOLDER CREATION */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-2 border-t border-slate-100">
+                <div className="p-3 rounded-xl border border-slate-200 bg-slate-50/50 flex items-center justify-between gap-2">
+                  <div>
+                    <div className="font-bold text-xs text-slate-900">Sao lưu Snapshot JSON</div>
+                    <div className="text-[10px] text-slate-500">Lưu bản sao dự phòng toàn trường</div>
+                  </div>
+                  <button
+                    onClick={handleBackupToDrive}
+                    disabled={loading || !currentUser}
+                    className="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-300 text-white rounded-lg text-xs font-bold shrink-0"
+                  >
+                    Sao lưu
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateFolder} className="p-3 rounded-xl border border-slate-200 bg-slate-50/50 flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newFolderName}
+                    onChange={e => setNewFolderName(e.target.value)}
+                    placeholder="Tên thư mục con mới..."
+                    className="flex-1 px-2.5 py-1 text-xs bg-white border border-slate-300 rounded-lg focus:outline-none"
+                  />
+                  <button
+                    type="submit"
+                    disabled={loading || !currentUser}
+                    className="px-2.5 py-1 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-bold shrink-0"
+                  >
+                    Tạo
+                  </button>
+                </form>
               </div>
             </div>
           )}
@@ -1295,6 +1486,241 @@ export const GoogleSyncModal: React.FC<GoogleSyncModalProps> = ({
                       <span className="font-bold text-slate-800 truncate ml-2">{fbConfig.oAuthClientId.slice(0, 15)}...</span>
                     </div>
                   </div>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* TAB 4: COMPREHENSIVE PARAMETERS & LINKS GUIDE */}
+          {activeTab === 'guide' && (
+            <div className="space-y-5 text-xs text-slate-700">
+              {/* Quick .env copy banner */}
+              <div className="p-4 bg-linear-to-r from-blue-50 to-indigo-50 border border-blue-200 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <FileCode className="w-5 h-5 text-blue-600" />
+                    <div>
+                      <h4 className="font-bold text-sm text-blue-950">
+                        Toàn bộ tệp cấu hình biến môi trường (.env)
+                      </h4>
+                      <p className="text-[11px] text-blue-700">
+                        Sao chép toàn bộ khối này dán vào tệp <code className="font-mono bg-blue-100 px-1 rounded">.env</code> hoặc biến môi trường trên GitHub Secrets / Vercel:
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() =>
+                      copyToClipboard(
+`VITE_GOOGLE_CLIENT_ID="559070527306-6vqhml1312cdc5n9e49jp30ardkmjagh.apps.googleusercontent.com"
+VITE_FIREBASE_API_KEY="AIzaSyDFKp8hjHFfA6aIdk1EZMs7GfcCJG1Hows"
+VITE_FIREBASE_AUTH_DOMAIN="gen-lang-client-0063576688.firebaseapp.com"
+VITE_FIREBASE_PROJECT_ID="gen-lang-client-0063576688"
+VITE_FIREBASE_STORAGE_BUCKET="gen-lang-client-0063576688.firebasestorage.app"
+VITE_FIREBASE_MESSAGING_SENDER_ID="559070527306"
+VITE_FIREBASE_APP_ID="1:559070527306:web:80f80cd6a4c90c79ec4bb3"
+VITE_GOOGLE_DRIVE_FOLDER_ID="1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq"`,
+                        'full-env'
+                      )
+                    }
+                    className="px-3 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors shrink-0"
+                  >
+                    {copiedKey === 'full-env' ? <Check className="w-3.5 h-3.5 text-emerald-300" /> : <Copy className="w-3.5 h-3.5" />}
+                    {copiedKey === 'full-env' ? 'Đã sao chép!' : 'Sao chép toàn bộ .env'}
+                  </button>
+                </div>
+              </div>
+
+              {/* Table of all environment variables with 1-click copy */}
+              <div className="border border-slate-200 rounded-xl overflow-hidden bg-white shadow-xs">
+                <div className="bg-slate-50 px-4 py-2.5 border-b border-slate-200 font-bold text-xs text-slate-800 flex items-center justify-between">
+                  <span>Bảng tra cứu từng thông số (Biến môi trường)</span>
+                  <span className="text-[11px] font-normal text-slate-500">Bấm nút sao chép bên phải từng dòng</span>
+                </div>
+                <div className="divide-y divide-slate-100 font-mono text-[11px]">
+                  {[
+                    {
+                      key: 'VITE_GOOGLE_DRIVE_FOLDER_ID',
+                      val: '1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq',
+                      desc: 'Mã định danh Folder lưu toàn bộ hồ sơ giáo viên (Sổ báo giảng, KHBD)',
+                      tag: 'Google Drive Đích'
+                    },
+                    {
+                      key: 'GOOGLE_DRIVE_FOLDER_URL',
+                      val: 'https://drive.google.com/drive/folders/1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq?usp=drive_link',
+                      desc: 'Đường dẫn liên kết trực tiếp mở thư mục trên Google Drive',
+                      tag: 'Google Drive Link'
+                    },
+                    {
+                      key: 'VITE_GOOGLE_CLIENT_ID',
+                      val: '559070527306-6vqhml1312cdc5n9e49jp30ardkmjagh.apps.googleusercontent.com',
+                      desc: 'OAuth 2.0 Client ID (Google Cloud Console)',
+                      tag: 'Google Workspace'
+                    },
+                    {
+                      key: 'VITE_FIREBASE_API_KEY',
+                      val: 'AIzaSyDFKp8hjHFfA6aIdk1EZMs7GfcCJG1Hows',
+                      desc: 'Khóa Web API của dự án Firebase',
+                      tag: 'Firebase'
+                    },
+                    {
+                      key: 'VITE_FIREBASE_AUTH_DOMAIN',
+                      val: 'gen-lang-client-0063576688.firebaseapp.com',
+                      desc: 'Tên miền xác thực người dùng',
+                      tag: 'Firebase'
+                    },
+                    {
+                      key: 'VITE_FIREBASE_PROJECT_ID',
+                      val: 'gen-lang-client-0063576688',
+                      desc: 'Mã định danh dự án Google Cloud / Firebase',
+                      tag: 'Google Cloud'
+                    },
+                    {
+                      key: 'VITE_FIREBASE_STORAGE_BUCKET',
+                      val: 'gen-lang-client-0063576688.firebasestorage.app',
+                      desc: 'Kho lưu trữ Cloud Storage',
+                      tag: 'Firebase'
+                    },
+                    {
+                      key: 'VITE_FIREBASE_MESSAGING_SENDER_ID',
+                      val: '559070527306',
+                      desc: 'Mã số dự án Cloud (Project Number)',
+                      tag: 'Google Cloud'
+                    },
+                    {
+                      key: 'VITE_FIREBASE_APP_ID',
+                      val: '1:559070527306:web:80f80cd6a4c90c79ec4bb3',
+                      desc: 'Mã ứng dụng Web Firebase',
+                      tag: 'Firebase'
+                    }
+                  ].map(item => (
+                    <div key={item.key} className="p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2 hover:bg-slate-50/80 transition-colors">
+                      <div className="space-y-0.5 min-w-0 flex-1">
+                        <div className="flex items-center gap-2">
+                          <span className="font-bold text-slate-900">{item.key}</span>
+                          <span className="text-[9px] px-1.5 py-0.2 rounded font-sans font-semibold bg-slate-100 text-slate-600 border border-slate-200">
+                            {item.tag}
+                          </span>
+                        </div>
+                        <div className="text-[10px] text-slate-500 font-sans truncate">{item.desc}</div>
+                        <div className="text-[11px] text-indigo-700 truncate select-all">{item.val}</div>
+                      </div>
+                      <button
+                        onClick={() => copyToClipboard(item.val, item.key)}
+                        className="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-[10px] font-sans font-semibold flex items-center gap-1 shrink-0 transition-colors"
+                      >
+                        {copiedKey === item.key ? <Check className="w-3 h-3 text-emerald-600" /> : <Copy className="w-3 h-3 text-slate-500" />}
+                        {copiedKey === item.key ? 'Đã chép' : 'Sao chép'}
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+              {/* Step-by-step guides */}
+              <div className="space-y-3 font-sans">
+                <h4 className="font-bold text-sm text-slate-900 flex items-center gap-2">
+                  <HelpCircle className="w-4 h-4 text-blue-600" />
+                  Hướng dẫn chi tiết cách lấy từng liên kết & thông số từ Google
+                </h4>
+
+                {/* Step 1: Google OAuth Client ID */}
+                <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs text-slate-900 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-blue-100 text-blue-800 flex items-center justify-center font-bold text-[10px]">1</span>
+                      Cách lấy Google OAuth Client ID (VITE_GOOGLE_CLIENT_ID)
+                    </div>
+                    <a
+                      href="https://console.cloud.google.com/apis/credentials"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-blue-600 hover:underline flex items-center gap-1 font-semibold"
+                    >
+                      Mở Google Cloud Credentials <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 pl-1 leading-relaxed">
+                    <li>Đăng nhập <a href="https://console.cloud.google.com" target="_blank" rel="noreferrer" className="text-blue-600 underline">Google Cloud Console</a> bằng tài khoản của bạn.</li>
+                    <li>Ở thanh trên cùng, chọn dự án hiện tại (hoặc chọn <code className="font-mono bg-slate-100 px-1 py-0.5 rounded">gen-lang-client-0063576688</code>).</li>
+                    <li>Vào mục <strong>APIs & Services</strong> &gt; <strong>Credentials</strong>.</li>
+                    <li>Tại mục <strong>OAuth 2.0 Client IDs</strong>, nhấp vào tên Client ID hoặc nút sao chép để lấy chuỗi có đuôi <code className="font-mono bg-slate-100 px-1 rounded">...apps.googleusercontent.com</code>.</li>
+                    <li><strong>Lưu ý quan trọng:</strong> Bấm chỉnh sửa Client ID đó và thêm <code className="font-mono bg-slate-100 px-1 rounded">http://localhost:3000</code> vào mục <em>Authorized JavaScript origins</em> để không bị lỗi đăng nhập khi chạy localhost.</li>
+                  </ol>
+                </div>
+
+                {/* Step 2: Firebase Credentials */}
+                <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs text-slate-900 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-amber-100 text-amber-800 flex items-center justify-center font-bold text-[10px]">2</span>
+                      Cách lấy 6 thông số Firebase (API Key, Project ID, App ID...)
+                    </div>
+                    <a
+                      href="https://console.firebase.google.com"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-amber-600 hover:underline flex items-center gap-1 font-semibold"
+                    >
+                      Mở Firebase Console <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 pl-1 leading-relaxed">
+                    <li>Vào <a href="https://console.firebase.google.com" target="_blank" rel="noreferrer" className="text-amber-600 underline">Firebase Console</a> &gt; Chọn dự án của bạn.</li>
+                    <li>Bấm vào biểu tượng <strong>Bánh răng cưa</strong> ở góc trên bên trái &gt; Chọn <strong>Project settings</strong> (Cài đặt dự án).</li>
+                    <li>Trong tab <strong>General</strong> (Chung), cuộn xuống phần <strong>Your apps</strong> (Ứng dụng của bạn).</li>
+                    <li>Chọn ứng dụng web (biểu tượng <code className="font-mono bg-slate-100 px-1 rounded">&lt;/&gt;</code>) và chọn mục <strong>Config</strong>.</li>
+                    <li>Bạn sẽ thấy đầy đủ: <code className="font-mono">apiKey</code>, <code className="font-mono">authDomain</code>, <code className="font-mono">projectId</code>, <code className="font-mono">storageBucket</code>, <code className="font-mono">messagingSenderId</code>, <code className="font-mono">appId</code>.</li>
+                  </ol>
+                </div>
+
+                {/* Step 3: Google Sheets Link */}
+                <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs text-slate-900 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-emerald-100 text-emerald-800 flex items-center justify-center font-bold text-[10px]">3</span>
+                      Cách lấy Liên kết Google Sheet trên Drive để dán vào ứng dụng
+                    </div>
+                    <a
+                      href="https://docs.google.com/spreadsheets"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-emerald-600 hover:underline flex items-center gap-1 font-semibold"
+                    >
+                      Mở Google Sheets <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 pl-1 leading-relaxed">
+                    <li>Mở tệp Google Sheet trên Google Drive của bạn (ví dụ: file kế hoạch bài dạy hoặc danh sách giáo viên).</li>
+                    <li>Bấm nút <strong>Chia sẻ (Share)</strong> màu xanh ở góc trên bên phải màn hình.</li>
+                    <li>Chọn quyền truy cập: Chọn <em>"Bất kỳ ai có đường liên kết"</em> (Người xem hoặc Người chỉnh sửa), hoặc chia sẻ cho tài khoản <code className="font-mono bg-slate-100 px-1 rounded">ThuntDBSS@gmail.com</code>.</li>
+                    <li>Nhấn nút <strong>Sao chép đường liên kết (Copy link)</strong>.</li>
+                    <li>Liên kết có định dạng: <code className="font-mono bg-slate-100 text-[10px] px-1 rounded select-all">https://docs.google.com/spreadsheets/d/1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms/edit</code></li>
+                    <li>Quay lại ứng dụng, chuyển sang tab <strong>Đồng bộ Google Sheets</strong>, dán link vào ô <em>"Liên kết Google Sheet"</em> rồi bấm <strong>Đọc dữ liệu</strong>!</li>
+                  </ol>
+                </div>
+
+                {/* Step 4: GitHub Repository Link */}
+                <div className="p-3.5 bg-white border border-slate-200 rounded-xl space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="font-bold text-xs text-slate-900 flex items-center gap-2">
+                      <span className="w-5 h-5 rounded-full bg-violet-100 text-violet-800 flex items-center justify-center font-bold text-[10px]">4</span>
+                      Cách lấy Liên kết kho lưu trữ GitHub (Repository Clone URL)
+                    </div>
+                    <a
+                      href="https://github.com/new"
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-[11px] text-violet-600 hover:underline flex items-center gap-1 font-semibold"
+                    >
+                      Tạo Repository mới <ExternalLink className="w-3 h-3" />
+                    </a>
+                  </div>
+                  <ol className="list-decimal list-inside space-y-1 text-[11px] text-slate-600 pl-1 leading-relaxed">
+                    <li>Đăng nhập vào <a href="https://github.com" target="_blank" rel="noreferrer" className="text-violet-600 underline">GitHub.com</a> &gt; Bấm dấu <strong>+</strong> ở góc trên bên phải &gt; Chọn <strong>New repository</strong>.</li>
+                    <li>Đặt tên kho (ví dụ: <code className="font-mono bg-slate-100 px-1 rounded">hscm-dbss-samsun</code>), chọn <em>Public</em> hoặc <em>Private</em> &gt; Bấm <strong>Create repository</strong>.</li>
+                    <li>Tại trang repository vừa tạo, bấm nút <strong>Code</strong> màu xanh &gt; chọn tab <strong>HTTPS</strong> &gt; Bấm biểu tượng <strong>Copy</strong> để lấy link có đuôi <code className="font-mono bg-slate-100 px-1 rounded">.git</code>.</li>
+                    <li>Định dạng link: <code className="font-mono bg-slate-100 text-[10px] px-1 rounded select-all">https://github.com/&lt;ten-tai-khoan&gt;/&lt;ten-repo&gt;.git</code>.</li>
+                  </ol>
                 </div>
               </div>
             </div>

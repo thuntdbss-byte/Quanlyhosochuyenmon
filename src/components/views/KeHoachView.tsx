@@ -24,7 +24,17 @@ import {
 } from 'lucide-react';
 
 export const KeHoachView: React.FC = () => {
-  const { keHoachList, departments, addKeHoach, deleteKeHoach, currentUser, currentRole, addToast } = useApp();
+  const {
+    keHoachList,
+    departments,
+    addKeHoach,
+    deleteKeHoach,
+    currentUser,
+    currentRole,
+    addToast,
+    targetDriveFolderUrl,
+    openGoogleSync
+  } = useApp();
   const [filterType, setFilterType] = useState<string>('ALL');
   const [filterDept, setFilterDept] = useState<string>('ALL');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -157,6 +167,25 @@ export const KeHoachView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2 flex-wrap">
+          <a
+            href={targetDriveFolderUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+            title="Mở thư mục lưu trữ hồ sơ trên Google Drive"
+          >
+            <FolderOpen className="w-4 h-4 text-amber-600" />
+            Folder Drive Hồ Sơ
+          </a>
+
+          <button
+            onClick={() => openGoogleSync('drive')}
+            className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 border border-slate-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-600" />
+            Đồng bộ Drive
+          </button>
+
           <button
             onClick={() => {
               setForm(prev => ({

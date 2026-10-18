@@ -21,9 +21,10 @@ import {
   FileText,
   Clock,
   User,
-  CheckCircle,
   FileCheck2,
-  ListOrdered
+  ListOrdered,
+  HardDrive,
+  Folder
 } from 'lucide-react';
 
 export const BaoGiangView: React.FC = () => {
@@ -44,7 +45,11 @@ export const BaoGiangView: React.FC = () => {
     approveWeeklyBaoGiangFile,
     deleteWeeklyBaoGiangFile,
     addToast,
-    openGoogleSync
+    openGoogleSync,
+    uploadWeeklyBaoGiangToDrive,
+    syncAllRecordsToGoogleDrive,
+    targetDriveFolderUrl,
+    targetDriveFolderId
   } = useApp();
 
   // Tab mode: FILES (Nộp & Quản lý file Sổ Báo Giảng hàng tuần) or PERIODS (Kê khai chi tiết từng tiết dạy)
@@ -126,11 +131,11 @@ export const BaoGiangView: React.FC = () => {
     }
   };
 
-  const handleWeeklyFileUploadSubmit = (e: React.FormEvent) => {
+  const handleWeeklyFileUploadSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     const teacher = teachers.find(t => t.id === weeklyUploadForm.teacherId) || currentUser;
 
-    addWeeklyBaoGiangFile({
+    await addWeeklyBaoGiangFile({
       teacherId: teacher.id,
       teacherName: teacher.name,
       departmentId: teacher.departmentId,
@@ -139,7 +144,7 @@ export const BaoGiangView: React.FC = () => {
       fileName: weeklyUploadForm.fileName || `SoBaoGiang_Tuan${weeklyUploadForm.week}_${teacher.name}.docx`,
       fileSize: weeklyUploadForm.fileSize || '245 KB',
       notes: weeklyUploadForm.notes || undefined
-    });
+    }, selectedFileObj);
 
     setShowUploadFileModal(false);
     setSelectedFileObj(null);
@@ -261,6 +266,32 @@ export const BaoGiangView: React.FC = () => {
           >
             <Upload className="w-4 h-4" />
             Tải Sổ Báo Giảng lên
+          </button>
+
+          <a
+            href={targetDriveFolderUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+            title="Mở thư mục lưu trữ hồ sơ trên Google Drive"
+          >
+            <Folder className="w-4 h-4 text-amber-600" />
+            Folder Drive Hồ Sơ
+          </a>
+
+          <button
+            onClick={async () => {
+              try {
+                await syncAllRecordsToGoogleDrive();
+              } catch (e: any) {
+                addToast(e.message || 'Lỗi lưu lên Drive', 'warning');
+              }
+            }}
+            className="px-3 py-2 bg-blue-50 hover:bg-blue-100 text-blue-900 border border-blue-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+            title="Lưu toàn bộ Sổ báo giảng và KHBD vào Thư mục Google Drive"
+          >
+            <HardDrive className="w-4 h-4 text-blue-600" />
+            Lưu toàn bộ vào Drive
           </button>
 
           <button
@@ -527,6 +558,35 @@ export const BaoGiangView: React.FC = () => {
                           </td>
                           <td className="p-3 text-right">
                             <div className="flex items-center justify-end gap-1.5">
+                              {/* Google Drive Link or Upload button */}
+                              {file.driveUrl ? (
+                                <a
+                                  href={file.driveUrl}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="px-2 py-1 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 rounded-lg text-xs font-bold flex items-center gap-1 shadow-2xs transition-colors"
+                                  title="Mở file trên Google Drive (1dZzgmUm...)"
+                                >
+                                  <HardDrive className="w-3.5 h-3.5 text-emerald-600" />
+                                  Drive 🔗
+                                </a>
+                              ) : (
+                                <button
+                                  onClick={async () => {
+                                    try {
+                                      await uploadWeeklyBaoGiangToDrive(file.id);
+                                    } catch (e: any) {
+                                      addToast(e.message || 'Lỗi lưu vào Drive', 'warning');
+                                    }
+                                  }}
+                                  className="px-2 py-1 bg-slate-50 hover:bg-indigo-50 text-slate-700 hover:text-indigo-700 border border-slate-200 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors"
+                                  title="Lưu file này vào Folder Google Drive (1dZzgmUm...)"
+                                >
+                                  <HardDrive className="w-3.5 h-3.5 text-slate-500" />
+                                  Lưu Drive
+                                </button>
+                              )}
+
                               {/* Download button */}
                               <button
                                 onClick={() => downloadSampleFile(file.fileName)}
@@ -790,13 +850,17 @@ export const BaoGiangView: React.FC = () => {
                 />
               </div>
 
-              <div className="p-3 bg-slate-50 rounded-lg border border-slate-200 text-slate-600 text-[11px] space-y-1">
-                <div className="font-bold text-slate-700 flex items-center gap-1.5">
-                  <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                  Quy định nộp Sổ Báo Giảng tại Trường DBĐH Dân tộc Sầm Sơn:
+              <div className="p-3 bg-amber-50/80 rounded-xl border border-amber-200 space-y-1">
+                <div className="flex items-center gap-1.5 font-bold text-amber-900">
+                  <Folder className="w-4 h-4 text-amber-600" />
+                  Lưu trữ tự động vào Google Drive
                 </div>
-                <p>• Tuần học: Tổng cộng 28 tuần giảng dạy chính thức.</p>
-                <p>• Hồ sơ sau khi nộp sẽ được Tổ trưởng chuyên môn thẩm định và ký số điện tử.</p>
+                <p className="text-[11px] text-amber-700 leading-relaxed">
+                  Tệp sổ báo giảng tải lên sẽ được đồng bộ trực tiếp vào Thư mục Google Drive trường:
+                  <span className="font-mono font-semibold block text-[10px] text-amber-800 break-all mt-0.5">
+                    1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq / 01_So_Bao_Giang
+                  </span>
+                </p>
               </div>
 
               <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">

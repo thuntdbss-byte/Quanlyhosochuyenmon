@@ -29,6 +29,15 @@ import {
   CURRENT_ACADEMIC_YEAR,
   CURRENT_SEMESTER
 } from '../data/mockData';
+import {
+  DEFAULT_DRIVE_FOLDER_ID,
+  DEFAULT_DRIVE_FOLDER_URL,
+  extractDriveFolderId,
+  uploadTeacherRecordToTargetDrive,
+  batchSyncAllTeacherRecordsToDrive,
+  BatchSyncTeacherRecordsResult,
+  getAccessToken
+} from '../services/googleWorkspace';
 
 export type ActiveTab =
   | 'dashboard'
@@ -91,12 +100,15 @@ interface AppContextType {
   rejectBaoGiang: (id: string, feedback: string) => void;
   addBaoGiangEntry: (entry: Omit<BaoGiangEntry, 'id'>) => void;
   deleteBaoGiangEntry: (id: string) => void;
-  addWeeklyBaoGiangFile: (file: Omit<WeeklyBaoGiangFile, 'id' | 'uploadDate' | 'status'>) => void;
+  addWeeklyBaoGiangFile: (file: Omit<WeeklyBaoGiangFile, 'id' | 'uploadDate' | 'status'>, fileObj?: File | null) => Promise<WeeklyBaoGiangFile>;
   approveWeeklyBaoGiangFile: (id: string) => void;
   deleteWeeklyBaoGiangFile: (id: string) => void;
   approveGiaoAn: (id: string, rating: 'XUAT_SAC' | 'TOT' | 'KHA' | 'DAT', reviewNotes?: string) => void;
   requestGiaoAnRevision: (id: string, reviewNotes: string) => void;
-  addGiaoAn: (item: Omit<GiaoAnItem, 'id' | 'uploadDate' | 'status'>) => void;
+  addGiaoAn: (item: Omit<GiaoAnItem, 'id' | 'uploadDate' | 'status'>, fileObj?: File | null) => Promise<GiaoAnItem>;
+  uploadGiaoAnToDrive: (id: string, fileObj?: File | null) => Promise<{ success: boolean; url?: string; message: string }>;
+  uploadWeeklyBaoGiangToDrive: (id: string, fileObj?: File | null) => Promise<{ success: boolean; url?: string; message: string }>;
+  syncAllRecordsToGoogleDrive: () => Promise<BatchSyncTeacherRecordsResult>;
   approveRequest: (id: string, notes?: string) => void;
   rejectRequest: (id: string, notes: string) => void;
   createRequest: (req: Omit<AbsenceAndSwapRequest, 'id' | 'code' | 'status'>) => void;
@@ -115,13 +127,19 @@ interface AppContextType {
 
   // Google Workspace Sync Modal & Connected Sheet
   isGoogleModalOpen: boolean;
-  googleModalTab: 'sheets' | 'drive' | 'github';
-  openGoogleSync: (tab?: 'sheets' | 'drive' | 'github') => void;
+  googleModalTab: 'sheets' | 'drive' | 'github' | 'guide';
+  openGoogleSync: (tab?: 'sheets' | 'drive' | 'github' | 'guide') => void;
   closeGoogleSync: () => void;
   connectedSheet: { id: string; name: string; url: string; lastSynced?: string } | null;
   setConnectedSheet: (sheet: { id: string; name: string; url: string; lastSynced?: string } | null) => void;
   importGiaoAnList: (newItems: GiaoAnItem[]) => void;
   importBaoGiangList: (newItems: BaoGiangEntry[]) => void;
+
+  // Google Drive Target Folder for Teacher Records
+  targetDriveFolderId: string;
+  targetDriveFolderUrl: string;
+  setTargetDriveFolder: (urlOrId: string) => void;
+  resetTargetDriveFolder: () => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -325,15 +343,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast('Đã trả lại giáo án kèm phản hồi sư phạm', 'warning');
   };
 
-  const addGiaoAn = (item: Omit<GiaoAnItem, 'id' | 'uploadDate' | 'status'>) => {
+  const addGiaoAn = async (
+    item: Omit<GiaoAnItem, 'id' | 'uploadDate' | 'status'>,
+    fileObj?: File | null
+  ): Promise<GiaoAnItem> => {
+    let driveFileId: string | undefined = undefined;
+    let driveUrl: string | undefined = undefined;
+
+    try {
+      const token = await getAccessToken();
+      if (token) {
+        const payloadContent = fileObj || `TRƯỜNG DỰ BỊ ĐẠI HỌC DÂN TỘC SẦM SƠN\nKẾ HOẠCH BÀI DẠY (GIÁO ÁN ĐIỆN TỬ - CV 5512)\nGiáo viên: ${item.teacherName} (${item.departmentName})\nMôn học: ${item.subject}\nTuần ${item.week} - Tiết ${item.curriculumPeriods}\nBài dạy: ${item.lessonTitle}\nChương/Chủ đề: ${item.unitName}\nNgày nộp: ${new Date().toISOString()}`;
+        const uploaded = await uploadTeacherRecordToTargetDrive({
+          fileName: item.fileName,
+          category: 'KE_HOACH_BAI_DAY',
+          content: payloadContent,
+          teacherName: item.teacherName,
+          week: item.week,
+          folderId: targetDriveFolderId
+        });
+        driveFileId = uploaded.id;
+        driveUrl = uploaded.webViewLink;
+        addToast(`Đã tự động lưu Giáo án lên Google Drive (${uploaded.name})`, 'success');
+      }
+    } catch (err: any) {
+      console.warn('Không thể tự động lưu lên Google Drive:', err);
+    }
+
     const newItem: GiaoAnItem = {
       ...item,
       id: `ga-${Date.now()}`,
       uploadDate: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      status: 'CHO_DUYET'
+      status: 'CHO_DUYET',
+      driveFileId,
+      driveUrl
     };
     setGiaoAnList(prev => [newItem, ...prev]);
     addToast('Nộp Kế hoạch bài dạy (Giáo án) thành công, chờ tổ trưởng phê duyệt', 'success');
+    return newItem;
+  };
+
+  const uploadGiaoAnToDrive = async (
+    id: string,
+    fileObj?: File | null
+  ): Promise<{ success: boolean; url?: string; message: string }> => {
+    const ga = giaoAnList.find(g => g.id === id);
+    if (!ga) throw new Error('Không tìm thấy giáo án');
+
+    const token = await getAccessToken();
+    if (!token) {
+      openGoogleSync('drive');
+      throw new Error('Vui lòng kết nối Google Workspace trước khi lưu lên Drive');
+    }
+
+    const payloadContent = fileObj || `TRƯỜNG DỰ BỊ ĐẠI HỌC DÂN TỘC SẦM SƠN\nKẾ HOẠCH BÀI DẠY (GIÁO ÁN ĐIỆN TỬ - CV 5512)\nGiáo viên: ${ga.teacherName} (${ga.departmentName})\nMôn học: ${ga.subject}\nTuần ${ga.week} - Tiết ${ga.curriculumPeriods}\nBài dạy: ${ga.lessonTitle}\nChương/Chủ đề: ${ga.unitName}\nNgày nộp: ${ga.uploadDate}\nTrạng thái: ${ga.status === 'DA_DUYET' ? 'Đã duyệt' : 'Chờ duyệt'}`;
+
+    const uploaded = await uploadTeacherRecordToTargetDrive({
+      fileName: ga.fileName,
+      category: 'KE_HOACH_BAI_DAY',
+      content: payloadContent,
+      teacherName: ga.teacherName,
+      week: ga.week,
+      folderId: targetDriveFolderId
+    });
+
+    setGiaoAnList(prev =>
+      prev.map(g => (g.id === id ? { ...g, driveFileId: uploaded.id, driveUrl: uploaded.webViewLink } : g))
+    );
+
+    addToast(`Đã lưu Giáo án "${ga.lessonTitle}" vào Google Drive thành công!`, 'success');
+    return { success: true, url: uploaded.webViewLink, message: 'Đã lưu lên Google Drive thành công' };
   };
 
   const approveRequest = (id: string, notes?: string) => {
@@ -482,15 +561,76 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast('Đã xóa tiết báo giảng', 'info');
   };
 
-  const addWeeklyBaoGiangFile = (file: Omit<WeeklyBaoGiangFile, 'id' | 'uploadDate' | 'status'>) => {
+  const addWeeklyBaoGiangFile = async (
+    file: Omit<WeeklyBaoGiangFile, 'id' | 'uploadDate' | 'status'>,
+    fileObj?: File | null
+  ): Promise<WeeklyBaoGiangFile> => {
+    let driveFileId: string | undefined = undefined;
+    let driveUrl: string | undefined = undefined;
+
+    try {
+      const token = await getAccessToken();
+      if (token) {
+        const payloadContent = fileObj || `TRƯỜNG DỰ BỊ ĐẠI HỌC DÂN TỘC SẦM SƠN\nSỔ BÁO GIẢNG VÀ KẾ HOẠCH DẠY HỌC\nGiáo viên: ${file.teacherName}\nTổ chuyên môn: ${file.departmentName}\nTuần thực hiện: Tuần ${file.week}\nNgày nộp: ${new Date().toISOString()}\nGhi chú: ${file.notes || 'Đúng tiến độ'}`;
+        const uploaded = await uploadTeacherRecordToTargetDrive({
+          fileName: file.fileName,
+          category: 'SO_BAO_GIANG',
+          content: payloadContent,
+          teacherName: file.teacherName,
+          week: file.week,
+          folderId: targetDriveFolderId
+        });
+        driveFileId = uploaded.id;
+        driveUrl = uploaded.webViewLink;
+        addToast(`Đã tự động lưu Sổ báo giảng lên Google Drive (${uploaded.name})`, 'success');
+      }
+    } catch (err: any) {
+      console.warn('Không thể tự động lưu lên Google Drive:', err);
+    }
+
     const newFile: WeeklyBaoGiangFile = {
       ...file,
       id: `wbg-${Date.now()}`,
       uploadDate: new Date().toISOString().replace('T', ' ').substring(0, 16),
-      status: 'CHO_DUYET'
+      status: 'CHO_DUYET',
+      driveFileId,
+      driveUrl
     };
     setWeeklyBaoGiangFiles(prev => [newFile, ...prev]);
     addToast(`Đã nộp Sổ báo giảng Tuần ${file.week} lên hệ thống thành công`, 'success');
+    return newFile;
+  };
+
+  const uploadWeeklyBaoGiangToDrive = async (
+    id: string,
+    fileObj?: File | null
+  ): Promise<{ success: boolean; url?: string; message: string }> => {
+    const bg = weeklyBaoGiangFiles.find(f => f.id === id);
+    if (!bg) throw new Error('Không tìm thấy sổ báo giảng');
+
+    const token = await getAccessToken();
+    if (!token) {
+      openGoogleSync('drive');
+      throw new Error('Vui lòng kết nối Google Workspace trước khi lưu lên Drive');
+    }
+
+    const payloadContent = fileObj || `TRƯỜNG DỰ BỊ ĐẠI HỌC DÂN TỘC SẦM SƠN\nSỔ BÁO GIẢNG VÀ KẾ HOẠCH DẠY HỌC\nGiáo viên: ${bg.teacherName}\nTổ chuyên môn: ${bg.departmentName}\nTuần: Tuần ${bg.week}\nNgày nộp: ${bg.uploadDate}\nTrạng thái: ${bg.status === 'DA_DUYET' ? 'Đã duyệt' : 'Chờ duyệt'}\nGhi chú: ${bg.notes || 'Đúng tiến độ'}`;
+
+    const uploaded = await uploadTeacherRecordToTargetDrive({
+      fileName: bg.fileName,
+      category: 'SO_BAO_GIANG',
+      content: payloadContent,
+      teacherName: bg.teacherName,
+      week: bg.week,
+      folderId: targetDriveFolderId
+    });
+
+    setWeeklyBaoGiangFiles(prev =>
+      prev.map(f => (f.id === id ? { ...f, driveFileId: uploaded.id, driveUrl: uploaded.webViewLink } : f))
+    );
+
+    addToast(`Đã lưu Sổ báo giảng Tuần ${bg.week} của ${bg.teacherName} vào Google Drive!`, 'success');
+    return { success: true, url: uploaded.webViewLink, message: 'Đã lưu lên Google Drive thành công' };
   };
 
   const approveWeeklyBaoGiangFile = (id: string) => {
@@ -553,7 +693,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // Google Workspace Sync Modal state & Connected Sheet
   const [isGoogleModalOpen, setIsGoogleModalOpen] = useState(false);
-  const [googleModalTab, setGoogleModalTab] = useState<'sheets' | 'drive' | 'github'>('sheets');
+  const [googleModalTab, setGoogleModalTab] = useState<'sheets' | 'drive' | 'github' | 'guide'>('sheets');
   const [connectedSheet, setConnectedSheetState] = useState<{ id: string; name: string; url: string; lastSynced?: string } | null>(() =>
     getStored('CONNECTED_SHEET', null)
   );
@@ -575,7 +715,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast(`Đã nhập thành công ${newItems.length} tiết báo giảng từ Google Sheets!`, 'success');
   };
 
-  const openGoogleSync = (tab: 'sheets' | 'drive' | 'github' = 'sheets') => {
+  const [targetDriveFolderId, setTargetDriveFolderIdState] = useState<string>(() =>
+    getStored('TARGET_DRIVE_FOLDER_ID', DEFAULT_DRIVE_FOLDER_ID)
+  );
+
+  const targetDriveFolderUrl = `https://drive.google.com/drive/folders/${targetDriveFolderId}?usp=drive_link`;
+
+  const setTargetDriveFolder = (urlOrId: string) => {
+    const extracted = extractDriveFolderId(urlOrId);
+    setTargetDriveFolderIdState(extracted);
+    setStored('TARGET_DRIVE_FOLDER_ID', extracted);
+    addToast(`Đã cấu hình thư mục Google Drive: ${extracted}`, 'success');
+  };
+
+  const resetTargetDriveFolder = () => {
+    setTargetDriveFolderIdState(DEFAULT_DRIVE_FOLDER_ID);
+    setStored('TARGET_DRIVE_FOLDER_ID', DEFAULT_DRIVE_FOLDER_ID);
+    addToast('Đã khôi phục thư mục mặc định: 1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq', 'info');
+  };
+
+  const syncAllRecordsToGoogleDrive = async (): Promise<BatchSyncTeacherRecordsResult> => {
+    const token = await getAccessToken();
+    if (!token) {
+      openGoogleSync('drive');
+      throw new Error('Vui lòng kết nối Google Workspace trước khi đồng bộ hồ sơ');
+    }
+
+    addToast('Đang tiến hành lưu toàn bộ Sổ báo giảng & Kế hoạch bài dạy vào Google Drive...', 'info');
+    const result = await batchSyncAllTeacherRecordsToDrive(
+      giaoAnList,
+      weeklyBaoGiangFiles,
+      targetDriveFolderId
+    );
+
+    const uploadedMap = new Map(result.uploadedFiles.map(f => [f.name, f.url]));
+
+    setGiaoAnList(prev =>
+      prev.map(ga => {
+        const url = uploadedMap.get(ga.fileName) || uploadedMap.get(`${ga.fileName}.docx`);
+        return url ? { ...ga, driveUrl: url } : ga;
+      })
+    );
+
+    setWeeklyBaoGiangFiles(prev =>
+      prev.map(bg => {
+        const url = uploadedMap.get(bg.fileName) || uploadedMap.get(`${bg.fileName}.docx`);
+        return url ? { ...bg, driveUrl: url } : bg;
+      })
+    );
+
+    addToast(`Đã lưu thành công ${result.successCount}/${result.total} hồ sơ giáo viên vào folder Google Drive!`, 'success');
+    return result;
+  };
+
+  const openGoogleSync = (tab: 'sheets' | 'drive' | 'github' | 'guide' = 'sheets') => {
     setGoogleModalTab(tab);
     setIsGoogleModalOpen(true);
   };
@@ -647,7 +840,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         connectedSheet,
         setConnectedSheet,
         importGiaoAnList,
-        importBaoGiangList
+        importBaoGiangList,
+        uploadGiaoAnToDrive,
+        uploadWeeklyBaoGiangToDrive,
+        syncAllRecordsToGoogleDrive,
+        targetDriveFolderId,
+        targetDriveFolderUrl,
+        setTargetDriveFolder,
+        resetTargetDriveFolder
       }}
     >
       {children}

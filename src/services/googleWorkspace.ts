@@ -7,13 +7,30 @@ import {
   User
 } from 'firebase/auth';
 import rawFirebaseConfig from '../../firebase-applet-config.json';
-import { UserProfile, Department, TeachingAssignment, GiaoAnItem, BaoGiangEntry } from '../types';
+import { UserProfile, Department, TeachingAssignment, GiaoAnItem, BaoGiangEntry, WeeklyBaoGiangFile } from '../types';
 
 // Supported OAuth scopes configured for Google Workspace
 export const WORKSPACE_SCOPES = [
   'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/drive',
   'https://www.googleapis.com/auth/drive.file'
 ];
+
+// Target Google Drive Folder specified for Teacher Records
+export const DEFAULT_DRIVE_FOLDER_ID = '1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq';
+export const DEFAULT_DRIVE_FOLDER_URL = 'https://drive.google.com/drive/folders/1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq?usp=drive_link';
+
+/**
+ * Extracts Google Drive Folder ID from a full Drive URL or returns trimmed raw ID.
+ */
+export const extractDriveFolderId = (input: string): string => {
+  if (!input) return DEFAULT_DRIVE_FOLDER_ID;
+  const match = input.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (match && match[1]) return match[1];
+  const idMatch = input.match(/id=([a-zA-Z0-9_-]+)/);
+  if (idMatch && idMatch[1]) return idMatch[1];
+  return input.trim();
+};
 
 // Fallback / environment configuration support for GitHub clones & custom deployments
 export const getEffectiveFirebaseConfig = () => {
@@ -313,14 +330,18 @@ export const listDriveFiles = async (mimeTypeFilter?: string): Promise<DriveFile
 /**
  * Create a folder in Google Drive.
  */
-export const createDriveFolder = async (folderName: string): Promise<DriveFileInfo> => {
+export const createDriveFolder = async (folderName: string, parentFolderId?: string): Promise<DriveFileInfo> => {
   const token = await getAccessToken();
   if (!token) throw new Error('Chưa đăng nhập Google Workspace');
 
-  const metadata = {
+  const metadata: any = {
     name: folderName,
     mimeType: 'application/vnd.google-apps.folder'
   };
+
+  if (parentFolderId) {
+    metadata.parents = [parentFolderId];
+  }
 
   const res = await fetch('https://www.googleapis.com/drive/v3/files', {
     method: 'POST',
@@ -340,20 +361,48 @@ export const createDriveFolder = async (folderName: string): Promise<DriveFileIn
 };
 
 /**
- * Upload a text / JSON / CSV file to Google Drive.
+ * Searches for a subfolder by name inside parentFolderId.
+ * If not found, creates it and returns the subfolder ID.
+ */
+export const getOrCreateSubfolder = async (parentFolderId: string, folderName: string): Promise<string> => {
+  const token = await getAccessToken();
+  if (!token) return parentFolderId;
+
+  try {
+    const q = `'${parentFolderId}' in parents and mimeType = 'application/vnd.google-apps.folder' and name = '${folderName.replace(/'/g, "\\'")}' and trashed = false`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(q)}&fields=files(id,name)`;
+    const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
+    if (res.ok) {
+      const data = await res.json();
+      if (data.files && data.files.length > 0) {
+        return data.files[0].id;
+      }
+    }
+
+    // Subfolder does not exist yet; create it
+    const created = await createDriveFolder(folderName, parentFolderId);
+    return created.id;
+  } catch (err) {
+    console.warn(`Không thể tạo thư mục con "${folderName}", lưu trực tiếp vào thư mục cha:`, err);
+    return parentFolderId;
+  }
+};
+
+/**
+ * Upload a file (binary File/Blob or string) to Google Drive safely without byte corruption.
  */
 export const uploadFileToDrive = async (
   fileName: string,
   mimeType: string,
-  content: string | Blob,
+  content: string | Blob | File,
   folderId?: string
 ): Promise<DriveFileInfo> => {
   const token = await getAccessToken();
-  if (!token) throw new Error('Chưa đăng nhập Google Workspace');
+  if (!token) throw new Error('Chưa đăng nhập Google Workspace. Vui lòng đăng nhập Google trước.');
 
   const metadata: any = {
     name: fileName,
-    mimeType
+    mimeType: mimeType || 'application/octet-stream'
   };
 
   if (folderId) {
@@ -364,19 +413,20 @@ export const uploadFileToDrive = async (
   const delimiter = `\r\n--${boundary}\r\n`;
   const closeDelimiter = `\r\n--${boundary}--`;
 
-  let bodyContent = typeof content === 'string' ? content : await content.text();
+  const metaPart = new Blob(
+    [
+      `${delimiter}Content-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}${delimiter}Content-Type: ${mimeType}\r\n\r\n`
+    ],
+    { type: 'text/plain' }
+  );
 
-  const multipartRequestBody =
-    delimiter +
-    'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
-    JSON.stringify(metadata) +
-    delimiter +
-    `Content-Type: ${mimeType}\r\n\r\n` +
-    bodyContent +
-    closeDelimiter;
+  const filePart = typeof content === 'string' ? new Blob([content], { type: mimeType }) : content;
+  const endPart = new Blob([closeDelimiter], { type: 'text/plain' });
+
+  const multipartRequestBody = new Blob([metaPart, filePart, endPart]);
 
   const res = await fetch(
-    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,createdTime,size',
+    'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,mimeType,webViewLink,createdTime,size,parents',
     {
       method: 'POST',
       headers: {
@@ -393,6 +443,181 @@ export const uploadFileToDrive = async (
   }
 
   return await res.json();
+};
+
+/**
+ * List all files in a specific Google Drive folder (defaults to teacher records folder).
+ */
+export const listFilesInTargetFolder = async (
+  folderId: string = DEFAULT_DRIVE_FOLDER_ID
+): Promise<DriveFileInfo[]> => {
+  const token = await getAccessToken();
+  if (!token) return [];
+
+  try {
+    const q = `'${folderId}' in parents and trashed = false`;
+    const url = `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(
+      q
+    )}&fields=files(id,name,mimeType,webViewLink,createdTime,modifiedTime,size)&pageSize=100&orderBy=modifiedTime desc`;
+
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` }
+    });
+
+    if (res.ok) {
+      const data = await res.json();
+      return data.files || [];
+    }
+  } catch (err) {
+    console.warn('Lỗi đọc danh sách tệp từ folder đích:', err);
+  }
+  return [];
+};
+
+export type TeacherRecordCategory = 'SO_BAO_GIANG' | 'KE_HOACH_BAI_DAY' | 'KE_HOACH_CHUYEN_MON' | 'TONG_HOP';
+
+export interface UploadTeacherRecordParams {
+  fileName: string;
+  category: TeacherRecordCategory;
+  content: string | Blob | File;
+  mimeType?: string;
+  teacherName?: string;
+  week?: number | string;
+  folderId?: string;
+}
+
+/**
+ * Upload a teacher record (Sổ báo giảng, Kế hoạch bài dạy, v.v.)
+ * directly into the target folder (https://drive.google.com/drive/folders/1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq)
+ * organized cleanly into categorized subfolders.
+ */
+export const uploadTeacherRecordToTargetDrive = async ({
+  fileName,
+  category,
+  content,
+  mimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  teacherName,
+  week,
+  folderId = DEFAULT_DRIVE_FOLDER_ID
+}: UploadTeacherRecordParams): Promise<DriveFileInfo> => {
+  const token = await getAccessToken();
+  if (!token) throw new Error('Chưa đăng nhập Google Workspace. Vui lòng đăng nhập Google trước khi lưu hồ sơ.');
+
+  // Determine subfolder category name
+  const subfolderMap: Record<TeacherRecordCategory, string> = {
+    SO_BAO_GIANG: '01_So_Bao_Giang',
+    KE_HOACH_BAI_DAY: '02_Ke_Hoach_Bai_Day_KHBD',
+    KE_HOACH_CHUYEN_MON: '03_Ke_Hoach_Chuyen_Mon',
+    TONG_HOP: '04_Sao_Luu_Chuyen_Mon'
+  };
+
+  const subfolderName = subfolderMap[category] || '01_Ho_So_Chuyen_Mon';
+  
+  // Resolve subfolder in target Google Drive folder
+  const targetSubfolderId = await getOrCreateSubfolder(folderId, subfolderName);
+
+  // Clean filename if needed
+  let finalFileName = fileName;
+  if (teacherName && !finalFileName.includes(teacherName.replace(/\s+/g, ''))) {
+    const extIdx = finalFileName.lastIndexOf('.');
+    if (extIdx !== -1) {
+      finalFileName = `${finalFileName.slice(0, extIdx)}_${teacherName.replace(/\s+/g, '')}${week ? `_Tuan${week}` : ''}${finalFileName.slice(extIdx)}`;
+    }
+  }
+
+  // Detect mimeType
+  let resolvedMimeType = mimeType;
+  if (finalFileName.endsWith('.docx')) {
+    resolvedMimeType = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
+  } else if (finalFileName.endsWith('.xlsx')) {
+    resolvedMimeType = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+  } else if (finalFileName.endsWith('.pdf')) {
+    resolvedMimeType = 'application/pdf';
+  } else if (finalFileName.endsWith('.json')) {
+    resolvedMimeType = 'application/json';
+  } else if (finalFileName.endsWith('.txt')) {
+    resolvedMimeType = 'text/plain; charset=UTF-8';
+  }
+
+  return await uploadFileToDrive(finalFileName, resolvedMimeType, content, targetSubfolderId);
+};
+
+export interface BatchSyncTeacherRecordsResult {
+  total: number;
+  successCount: number;
+  failedCount: number;
+  uploadedFiles: { id: string; name: string; url?: string; category: string }[];
+}
+
+/**
+ * Batch sync / upload all teacher records (Sổ báo giảng, Kế hoạch bài dạy KHBD, Kế hoạch giáo dục)
+ * directly into the target Google Drive folder (1dZzgmUmO3QPN5Uk0H94uWl6p-vXpYfqq).
+ */
+export const batchSyncAllTeacherRecordsToDrive = async (
+  giaoAnList: GiaoAnItem[],
+  weeklyBaoGiangFiles: WeeklyBaoGiangFile[],
+  folderId: string = DEFAULT_DRIVE_FOLDER_ID
+): Promise<BatchSyncTeacherRecordsResult> => {
+  const token = await getAccessToken();
+  if (!token) throw new Error('Chưa đăng nhập Google Workspace. Vui lòng đăng nhập Google trước.');
+
+  const results: { id: string; name: string; url?: string; category: string }[] = [];
+  let failedCount = 0;
+
+  // 1. Upload Sổ báo giảng files
+  for (const bg of weeklyBaoGiangFiles) {
+    try {
+      const content = `TRƯỜNG DỰ BỊ ĐẠI HỌC DÂN TỘC SẦM SƠN\nSỔ BÁO GIẢNG VÀ KẾ HOẠCH DẠY HỌC\n\nGiáo viên: ${bg.teacherName}\nTổ chuyên môn: ${bg.departmentName}\nTuần thực hiện: Tuần ${bg.week}\nNgày nộp: ${bg.uploadDate}\nTrạng thái phê duyệt: ${bg.status === 'DA_DUYET' ? 'Đã duyệt' : 'Chờ duyệt'}\nGhi chú / Tiến độ: ${bg.notes || 'Đúng tiến độ PPCT'}\n\nĐã xác nhận và lưu trữ tại Google Drive.`;
+      const uploaded = await uploadTeacherRecordToTargetDrive({
+        fileName: bg.fileName.endsWith('.docx') || bg.fileName.endsWith('.txt') ? bg.fileName : `${bg.fileName}.docx`,
+        category: 'SO_BAO_GIANG',
+        content,
+        teacherName: bg.teacherName,
+        week: bg.week,
+        folderId
+      });
+      results.push({
+        id: uploaded.id,
+        name: uploaded.name,
+        url: uploaded.webViewLink,
+        category: 'Sổ báo giảng'
+      });
+    } catch (e) {
+      console.warn('Lỗi đồng bộ sổ báo giảng:', e);
+      failedCount++;
+    }
+  }
+
+  // 2. Upload Giáo án / KHBD
+  for (const ga of giaoAnList) {
+    try {
+      const content = `TRƯỜNG DỰ BỊ ĐẠI HỌC DÂN TỘC SẦM SƠN\nKẾ HOẠCH BÀI DẠY (CV 5512/BGDĐT)\n\nMôn học: ${ga.subject} | ${ga.grade ? `Khối/Lớp: ${ga.grade}` : 'Hệ Dự bị'}\nGiáo viên: ${ga.teacherName} (${ga.departmentName})\nTuần: ${ga.week} | Tiết PPCT: ${ga.curriculumPeriods}\nBài dạy: ${ga.lessonTitle}\nChương/Chủ đề: ${ga.unitName}\n\nI. MỤC TIÊU DẠY HỌC:\n- Năng lực cần phát triển: ${ga.competencies?.join(', ') || 'Tự chủ, giải quyết vấn đề'}\n- Phẩm chất: Yêu nước, chăm chỉ, trách nhiệm\n\nII. TIẾN TRÌNH DẠY HỌC (4 HOẠT ĐỘNG CV 5512):\n1. Khởi động / Mở đầu\n2. Hình thành kiến thức mới\n3. Luyện tập\n4. Vận dụng\n\nNgày nộp: ${ga.uploadDate}\nNgười duyệt: ${ga.reviewerName || 'Tổ trưởng chuyên môn'}\nTrạng thái: ${ga.status === 'DA_DUYET' ? 'Đã phê duyệt' : 'Đang xử lý'}`;
+      const uploaded = await uploadTeacherRecordToTargetDrive({
+        fileName: ga.fileName.endsWith('.docx') || ga.fileName.endsWith('.txt') ? ga.fileName : `${ga.fileName}.docx`,
+        category: 'KE_HOACH_BAI_DAY',
+        content,
+        teacherName: ga.teacherName,
+        week: ga.week,
+        folderId
+      });
+      results.push({
+        id: uploaded.id,
+        name: uploaded.name,
+        url: uploaded.webViewLink,
+        category: 'Kế hoạch bài dạy (KHBD)'
+      });
+    } catch (e) {
+      console.warn('Lỗi đồng bộ KHBD:', e);
+      failedCount++;
+    }
+  }
+
+  return {
+    total: results.length + failedCount,
+    successCount: results.length,
+    failedCount,
+    uploadedFiles: results
+  };
 };
 
 // ==========================================

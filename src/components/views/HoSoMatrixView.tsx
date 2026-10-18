@@ -11,11 +11,12 @@ import {
   Search,
   BookOpen,
   FileSpreadsheet,
-  Award
+  Award,
+  Folder
 } from 'lucide-react';
 
 export const HoSoMatrixView: React.FC = () => {
-  const { hoSoMatrix, remindTeacher, currentRole, addToast } = useApp();
+  const { hoSoMatrix, remindTeacher, currentRole, addToast, targetDriveFolderUrl } = useApp();
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [search, setSearch] = useState<string>('');
 
@@ -61,6 +62,17 @@ export const HoSoMatrixView: React.FC = () => {
         </div>
 
         <div className="flex items-center gap-2">
+          <a
+            href={targetDriveFolderUrl}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="px-3.5 py-2 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-300 rounded-lg text-xs font-bold flex items-center gap-1.5 shadow-2xs transition-colors"
+            title="Mở thư mục lưu trữ hồ sơ trên Google Drive"
+          >
+            <Folder className="w-4 h-4 text-amber-600" />
+            Folder Drive Hồ Sơ
+          </a>
+
           {currentRole !== 'GIAO_VIEN' && warningTeachers > 0 && (
             <button
               onClick={handleRemindAll}
