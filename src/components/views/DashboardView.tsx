@@ -11,7 +11,9 @@ import {
   ArrowUpRight,
   Send,
   Calendar,
-  Sparkles
+  Sparkles,
+  HardDrive,
+  ExternalLink
 } from 'lucide-react';
 
 export const DashboardView: React.FC = () => {
@@ -25,7 +27,9 @@ export const DashboardView: React.FC = () => {
     hoSoMatrix,
     neNepList,
     setActiveTab,
-    currentRole
+    currentRole,
+    connectedSheet,
+    openGoogleSync
   } = useApp();
 
   const pendingRequests = requests.filter(r => r.status === 'CHO_DUYET');
@@ -68,6 +72,66 @@ export const DashboardView: React.FC = () => {
               Kiểm duyệt Giáo án
             </button>
           </div>
+        </div>
+      </div>
+
+      {/* Google Sheets & Drive Live Connection Status Banner */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 ${
+            connectedSheet ? 'bg-emerald-100 text-emerald-700' : 'bg-slate-100 text-slate-600'
+          }`}>
+            <HardDrive className="w-5 h-5" />
+          </div>
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <span className="font-bold text-xs text-slate-900">
+                {connectedSheet
+                  ? `Google Sheet kết nối: ${connectedSheet.name}`
+                  : 'Kết nối Dữ liệu với Google Sheet trong Google Drive'}
+              </span>
+              {connectedSheet ? (
+                <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200 flex items-center gap-1">
+                  <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                  Đang đồng bộ 2 chiều
+                </span>
+              ) : (
+                <span className="text-[10px] font-semibold px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200">
+                  ThuntDBSS@gmail.com
+                </span>
+              )}
+            </div>
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              {connectedSheet
+                ? `Cập nhật lần cuối: ${connectedSheet.lastSynced || 'Hôm nay'}. Dữ liệu được lưu trữ trực tiếp trên Google Drive.`
+                : 'Lưu trữ tự động hồ sơ chuyên môn, giáo án KHBD CV 5512 và sổ báo giảng vào Google Drive.'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 shrink-0">
+          {connectedSheet && (
+            <a
+              href={connectedSheet.url}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition-colors"
+            >
+              <ExternalLink className="w-3.5 h-3.5 text-slate-500" />
+              Mở Sheet
+            </a>
+          )}
+          <button
+            onClick={() => openGoogleSync('sheets')}
+            className={`px-3.5 py-1.5 rounded-lg text-xs font-bold flex items-center gap-1.5 transition-all shadow-2xs ${
+              connectedSheet
+                ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
+                : 'bg-linear-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white'
+            }`}
+          >
+            <FileSpreadsheet className="w-3.5 h-3.5" />
+            {connectedSheet ? 'Đồng bộ Dữ liệu' : 'Kết nối Google Drive & Sheets'}
+          </button>
         </div>
       </div>
 

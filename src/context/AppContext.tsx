@@ -113,11 +113,15 @@ interface AppContextType {
   addToast: (message: string, type?: 'success' | 'info' | 'warning' | 'error') => void;
   removeToast: (id: string) => void;
 
-  // Google Workspace Sync Modal
+  // Google Workspace Sync Modal & Connected Sheet
   isGoogleModalOpen: boolean;
-  googleModalTab: 'sheets' | 'drive';
-  openGoogleSync: (tab?: 'sheets' | 'drive') => void;
+  googleModalTab: 'sheets' | 'drive' | 'github';
+  openGoogleSync: (tab?: 'sheets' | 'drive' | 'github') => void;
   closeGoogleSync: () => void;
+  connectedSheet: { id: string; name: string; url: string; lastSynced?: string } | null;
+  setConnectedSheet: (sheet: { id: string; name: string; url: string; lastSynced?: string } | null) => void;
+  importGiaoAnList: (newItems: GiaoAnItem[]) => void;
+  importBaoGiangList: (newItems: BaoGiangEntry[]) => void;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -547,11 +551,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addToast('Đã khôi phục dữ liệu mẫu hệ thống ban đầu', 'info');
   };
 
-  // Google Workspace Sync Modal state
+  // Google Workspace Sync Modal state & Connected Sheet
   const [isGoogleModalOpen, setIsGoogleModalOpen] = useState(false);
-  const [googleModalTab, setGoogleModalTab] = useState<'sheets' | 'drive'>('sheets');
+  const [googleModalTab, setGoogleModalTab] = useState<'sheets' | 'drive' | 'github'>('sheets');
+  const [connectedSheet, setConnectedSheetState] = useState<{ id: string; name: string; url: string; lastSynced?: string } | null>(() =>
+    getStored('CONNECTED_SHEET', null)
+  );
 
-  const openGoogleSync = (tab: 'sheets' | 'drive' = 'sheets') => {
+  const setConnectedSheet = (sheet: { id: string; name: string; url: string; lastSynced?: string } | null) => {
+    setConnectedSheetState(sheet);
+    setStored('CONNECTED_SHEET', sheet);
+  };
+
+  const importGiaoAnList = (newItems: GiaoAnItem[]) => {
+    if (!newItems || newItems.length === 0) return;
+    setGiaoAnList(prev => [...newItems, ...prev]);
+    addToast(`Đã nhập thành công ${newItems.length} kế hoạch bài dạy (giáo án) từ Google Sheets!`, 'success');
+  };
+
+  const importBaoGiangList = (newItems: BaoGiangEntry[]) => {
+    if (!newItems || newItems.length === 0) return;
+    setBaoGiangList(prev => [...newItems, ...prev]);
+    addToast(`Đã nhập thành công ${newItems.length} tiết báo giảng từ Google Sheets!`, 'success');
+  };
+
+  const openGoogleSync = (tab: 'sheets' | 'drive' | 'github' = 'sheets') => {
     setGoogleModalTab(tab);
     setIsGoogleModalOpen(true);
   };
@@ -619,7 +643,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         isGoogleModalOpen,
         googleModalTab,
         openGoogleSync,
-        closeGoogleSync
+        closeGoogleSync,
+        connectedSheet,
+        setConnectedSheet,
+        importGiaoAnList,
+        importBaoGiangList
       }}
     >
       {children}
